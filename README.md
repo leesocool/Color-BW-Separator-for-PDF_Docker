@@ -5,7 +5,7 @@
 
 This tool is used to separate color and black & white pages from a PDF file into two separate PDF files.
 
-Try our free web version at: [pdf-sep.codesocean.top](https://pdf-sep.codesocean.top)
+Due to malicious attacks from unknown traffic, we have suspended the free web-based service. In the future, we may attempt to deploy a more secure free version of the service for everyone to use.
 
 ## Languages
 <a href="./README-zh_cn.md">简体中文</a>
