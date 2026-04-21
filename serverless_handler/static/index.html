@@ -759,7 +759,7 @@
             downloadStatus.textContent = '正在下载彩色PDF...';
             const a = document.createElement('a');
             a.href = colorPdfUrl;
-            a.download = 'color_pages.pdf';
+            a.download = colorPdfUrl.split('/').pop();
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -777,7 +777,7 @@
             downloadStatus.textContent = '正在下载黑白PDF...';
             const a = document.createElement('a');
             a.href = bwPdfUrl;
-            a.download = 'bw_pages.pdf';
+            a.download = bwPdfUrl.split('/').pop();
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -826,7 +826,7 @@
                     case 'file_link':
                         const linkA = document.createElement('a');
                         linkA.href = data.url;
-                        linkA.download = data.fileType === 'color' ? 'color_pages.pdf' : 'bw_pages.pdf';
+                        linkA.download = data.url.split('/').pop();
                         document.body.appendChild(linkA);
                         linkA.click();
                         document.body.removeChild(linkA);

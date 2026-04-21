@@ -6,6 +6,7 @@ import json
 import os
 import base64
 import uuid
+import re
 import numpy as np
 from io import BytesIO
 from PIL import Image
@@ -20,6 +21,11 @@ OUTPUT_DIR = os.path.join(DATA_DIR, "output")
 
 # WebSocket 消息大小上限（100 MB）
 MAX_MESSAGE_SIZE = 100 * 1024 * 1024
+
+# 下载文件名格式：{uuid}_color.pdf 或 {uuid}_bw.pdf
+_VALID_OUTPUT_FILENAME = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_(color|bw)\.pdf$'
+)
 
 
 def ensure_dirs():
@@ -248,9 +254,9 @@ async def websocket_handler(request):
 # 文件下载路由：提供 /files/{filename} 供浏览器下载
 async def download_handler(request):
     raw_filename = request.match_info.get("filename", "")
-    # 使用 basename 防止路径穿越攻击
+    # 严格校验文件名格式，防止路径穿越和任意文件读取
     filename = os.path.basename(raw_filename)
-    if not filename:
+    if not _VALID_OUTPUT_FILENAME.match(filename):
         raise web.HTTPForbidden()
     file_path = os.path.join(OUTPUT_DIR, filename)
     if not os.path.exists(file_path):
