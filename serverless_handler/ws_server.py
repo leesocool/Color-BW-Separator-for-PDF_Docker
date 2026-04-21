@@ -9,34 +9,23 @@ import uuid
 import numpy as np
 from io import BytesIO
 from PIL import Image
-import upyun
-import toml
 import fitz
 from aiohttp import web, WSMsgType
 import pathlib
 
-# 加载配置文件
-def load_config():
-    config_path = "./config.toml"
-    return toml.load(config_path)
+# 数据目录（可通过环境变量覆盖，默认 /data）
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
+INPUT_DIR = os.path.join(DATA_DIR, "input")
+OUTPUT_DIR = os.path.join(DATA_DIR, "output")
 
-config = load_config()
+# WebSocket 消息大小上限（100 MB）
+MAX_MESSAGE_SIZE = 100 * 1024 * 1024
 
-# UPYUN 配置
-UPYUN_SERVICE_NAME = config['upyun']['service_name']
-UPYUN_OPERATOR_NAME = config['upyun']['operator_name']
-UPYUN_OPERATOR_PASSWORD = config['upyun']['operator_password']
-UPYUN_DOMAIN = config['upyun']['domain']
 
-# WebSocket消息大小限制
-MAX_MESSAGE_SIZE = config['websocket']['max_message_size']
+def ensure_dirs():
+    os.makedirs(INPUT_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 创建临时文件夹
-def ensure_tmp_dir():
-    tmp_dir = "tmp"
-    if not os.path.exists(tmp_dir):
-        os.makedirs(tmp_dir)
-    return tmp_dir
 
 # 判断是否为彩色图像
 def is_color_image(image, saturation_threshold=0.35, color_fraction_threshold=0.001):
@@ -50,6 +39,7 @@ def is_color_image(image, saturation_threshold=0.35, color_fraction_threshold=0.
     color_fraction = np.mean(color_pixels)
     return color_fraction > color_fraction_threshold
 
+
 # 判断页面是否为彩色
 def is_color_page(page, saturation_threshold=0.35, color_fraction_threshold=0.001):
     pix = page.get_pixmap()
@@ -57,24 +47,10 @@ def is_color_page(page, saturation_threshold=0.35, color_fraction_threshold=0.00
     image = Image.open(BytesIO(img))
     return is_color_image(image, saturation_threshold, color_fraction_threshold)
 
-# 上传文件到又拍云
-async def _upload_to_upyun_with_overwrite(up_instance, remote_path, data_stream, domain):
-    try:
-        try:
-            up_instance.getinfo(remote_path)
-            up_instance.delete(remote_path)
-        except Exception:
-            pass
-        data_stream.seek(0)
-        up_instance.put(remote_path, data_stream, checksum=True)
-        return f"https://{domain}/{remote_path.lstrip('/')}"
-    except Exception as e:
-        raise
 
-# 分割PDF为彩色和黑白两部分
+# 分割 PDF，结果保存到本地 OUTPUT_DIR
 async def split_pdf(input_pdf_path, session_id, is_double_sized_printing,
                     saturation_threshold=0.35, color_fraction_threshold=0.001, websocket=None):
-    up = upyun.UpYun(UPYUN_SERVICE_NAME, UPYUN_OPERATOR_NAME, UPYUN_OPERATOR_PASSWORD)
     doc = fitz.open(input_pdf_path)
     color_doc = fitz.open()
     bw_doc = fitz.open()
@@ -115,50 +91,38 @@ async def split_pdf(input_pdf_path, session_id, is_double_sized_printing,
     for page_num in sorted(bw_pages):
         bw_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
 
-    color_pdf_url = None
-    bw_pdf_url = None
+    color_download_url = None
+    bw_download_url = None
 
     if color_pages:
-        color_io = BytesIO()
-        color_doc.save(color_io, garbage=4, deflate=True)
-        color_remote_path = f"{session_id}/{session_id}_color.pdf"
-        try:
-            up.mkdir(session_id)
-        except Exception:
-            pass
-        color_pdf_url = await _upload_to_upyun_with_overwrite(up, color_remote_path, color_io, UPYUN_DOMAIN)
-        color_io.close()
+        color_filename = f"{session_id}_color.pdf"
+        color_doc.save(os.path.join(OUTPUT_DIR, color_filename), garbage=4, deflate=True)
+        color_download_url = f"/files/{color_filename}"
 
     if bw_pages:
-        bw_io = BytesIO()
-        bw_doc.save(bw_io, garbage=4, deflate=True)
-        bw_remote_path = f"{session_id}/{session_id}_bw.pdf"
-        try:
-            up.mkdir(session_id)
-        except Exception:
-            pass
-        bw_pdf_url = await _upload_to_upyun_with_overwrite(up, bw_remote_path, bw_io, UPYUN_DOMAIN)
-        bw_io.close()
+        bw_filename = f"{session_id}_bw.pdf"
+        bw_doc.save(os.path.join(OUTPUT_DIR, bw_filename), garbage=4, deflate=True)
+        bw_download_url = f"/files/{bw_filename}"
 
     doc.close()
     color_doc.close()
     bw_doc.close()
 
     return {
-        "color_pdf_url": color_pdf_url,
-        "bw_pdf_url": bw_pdf_url,
+        "color_pdf_url": color_download_url,
+        "bw_pdf_url": bw_download_url,
         "color_pages_count": len(color_pages),
         "bw_pages_count": len(bw_pages),
         "total_pages": total_pages
     }
 
+
 # WebSocket 处理函数
 async def websocket_handler(request):
     ws = web.WebSocketResponse(max_msg_size=MAX_MESSAGE_SIZE)
     await ws.prepare(request)
-    
+
     session_id = str(uuid.uuid4())
-    tmp_dir = ensure_tmp_dir()
     client_files = {}
     chunk_buffers = {}
 
@@ -168,6 +132,7 @@ async def websocket_handler(request):
                 try:
                     data = json.loads(msg.data)
                     msg_type = data.get("type", "")
+
                     if msg_type == "upload":
                         file_name = data.get("fileName", "document.pdf")
                         chunk_index = data.get("chunkIndex")
@@ -187,7 +152,7 @@ async def websocket_handler(request):
                                     })
                                     continue
                                 combined = b"".join([base64.b64decode(c) for c in chunk_buffers[file_name]])
-                                file_path = os.path.join(tmp_dir, f"{session_id}_{file_name}")
+                                file_path = os.path.join(INPUT_DIR, f"{session_id}_{file_name}")
                                 with open(file_path, "wb") as f:
                                     f.write(combined)
                                 client_files["input_pdf"] = file_path
@@ -200,7 +165,7 @@ async def websocket_handler(request):
                                 })
                         else:
                             file_data = data.get("data", "").split(",")[1]
-                            file_path = os.path.join(tmp_dir, f"{session_id}_{file_name}")
+                            file_path = os.path.join(INPUT_DIR, f"{session_id}_{file_name}")
                             decoded = base64.b64decode(file_data)
                             with open(file_path, "wb") as f:
                                 f.write(decoded)
@@ -247,7 +212,7 @@ async def websocket_handler(request):
                             })
                             continue
                         url_key = f"{file_type}_pdf_url"
-                        if url_key in client_files:
+                        if url_key in client_files and client_files[url_key]:
                             await ws.send_json({
                                 "type": "file_link",
                                 "fileType": file_type,
@@ -269,51 +234,67 @@ async def websocket_handler(request):
                         "message": f"内部处理错误: {str(e)}"
                     })
     finally:
-        print(f"清理会话 {session_id}")
+        # 仅清理输入临时文件，输出文件保留在 OUTPUT_DIR 供下载
+        print(f"清理会话 {session_id} 的临时输入文件")
         if "input_pdf" in client_files and os.path.exists(client_files["input_pdf"]):
             try:
                 os.remove(client_files["input_pdf"])
             except Exception as e:
-                print(f"删除文件失败: {e}")
-        try:
-            up = upyun.UpYun(UPYUN_SERVICE_NAME, UPYUN_OPERATOR_NAME, UPYUN_OPERATOR_PASSWORD)
-            for file_type in ["color", "bw"]:
-                url_key = f"{file_type}_pdf_url"
-                if url_key in client_files:
-                    up.delete(f"{session_id}/{session_id}_{file_type}.pdf")
-            up.delete(session_id)
-        except Exception as e:
-            print(f"清理又拍云文件失败: {e}")
-    
+                print(f"删除输入文件失败: {e}")
+
     return ws
+
+
+# 文件下载路由：提供 /files/{filename} 供浏览器下载
+async def download_handler(request):
+    filename = request.match_info.get("filename", "")
+    # 防止路径穿越攻击
+    if ".." in filename or os.sep in filename:
+        raise web.HTTPForbidden()
+    file_path = os.path.join(OUTPUT_DIR, filename)
+    if not os.path.exists(file_path):
+        raise web.HTTPNotFound()
+    return web.FileResponse(
+        file_path,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+# 根路径重定向到 index.html
+async def index_handler(request):
+    current_dir = pathlib.Path(__file__).parent.resolve()
+    return web.FileResponse(current_dir / 'static' / 'index.html')
+
 
 # 启动服务器
 async def main():
-    ensure_tmp_dir()
-    
-    # 创建应用
+    ensure_dirs()
+
     app = web.Application()
-    
-    # 设置路由
-    # 静态文件路由
-    current_dir = pathlib.Path(__file__).parent
-    static_path = current_dir / 'static'
-    app.router.add_static('/', static_path)
-    
-    # WebSocket 路由
+
+    # 路由注册顺序：具体路由优先于静态路由
+    app.router.add_get('/', index_handler)
     app.router.add_get('/ws', websocket_handler)
-    
-    # 启动服务器
+    app.router.add_get('/files/{filename}', download_handler)
+
+    # 静态文件路由（index.html、favicon.png 等）
+    current_dir = pathlib.Path(__file__).parent.resolve()
+    static_path = current_dir / 'static'
+    app.router.add_static('/static', static_path)
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 9000)
     await site.start()
-    
+
     print(f"服务器已启动在 http://0.0.0.0:9000")
     print(f"WebSocket 端点: ws://0.0.0.0:9000/ws")
-    
+    print(f"输入目录: {INPUT_DIR}")
+    print(f"输出目录: {OUTPUT_DIR}")
+
     # 保持服务器运行
     await asyncio.Future()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

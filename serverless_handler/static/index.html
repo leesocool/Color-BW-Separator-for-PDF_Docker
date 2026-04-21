@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="icon" type="image/png" href="/static/favicon.png">
     <title>轻松分离 PDF 的黑白与彩色页面</title>
     <style>
         body {
@@ -560,7 +560,8 @@
         // 自动连接WebSocket
         function connectWebSocket() {
             try {
-                ws = new WebSocket('wss://1301117745-gi1fhmchtp.ap-guangzhou.tencentscf.com');
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
 
                 ws.onopen = () => {
                     console.log('WebSocket连接成功');
@@ -755,9 +756,14 @@
                 return;
             }
 
-            downloadStatus.textContent = '正在打开彩色PDF下载链接...';
-            window.open(colorPdfUrl, '_blank');
-            downloadStatus.textContent = '已打开彩色PDF下载链接';
+            downloadStatus.textContent = '正在下载彩色PDF...';
+            const a = document.createElement('a');
+            a.href = colorPdfUrl;
+            a.download = 'color_pages.pdf';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            downloadStatus.textContent = '彩色PDF下载已开始';
         });
 
         downloadBwBtn.addEventListener('click', (e) => {
@@ -768,9 +774,14 @@
                 return;
             }
 
-            downloadStatus.textContent = '正在打开黑白PDF下载链接...';
-            window.open(bwPdfUrl, '_blank');
-            downloadStatus.textContent = '已打开黑白PDF下载链接';
+            downloadStatus.textContent = '正在下载黑白PDF...';
+            const a = document.createElement('a');
+            a.href = bwPdfUrl;
+            a.download = 'bw_pages.pdf';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            downloadStatus.textContent = '黑白PDF下载已开始';
             showStarModal();
         });
 
@@ -813,8 +824,13 @@
                         break;
 
                     case 'file_link':
-                        downloadStatus.textContent = `已打开${data.fileType === 'color' ? '彩色' : '黑白'}PDF下载链接`;
-                        window.open(data.url, '_blank');
+                        const linkA = document.createElement('a');
+                        linkA.href = data.url;
+                        linkA.download = data.fileType === 'color' ? 'color_pages.pdf' : 'bw_pages.pdf';
+                        document.body.appendChild(linkA);
+                        linkA.click();
+                        document.body.removeChild(linkA);
+                        downloadStatus.textContent = `已开始下载${data.fileType === 'color' ? '彩色' : '黑白'}PDF`;
                         break;
 
                     case 'error':
