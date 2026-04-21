@@ -247,9 +247,10 @@ async def websocket_handler(request):
 
 # 文件下载路由：提供 /files/{filename} 供浏览器下载
 async def download_handler(request):
-    filename = request.match_info.get("filename", "")
-    # 防止路径穿越攻击
-    if ".." in filename or os.sep in filename:
+    raw_filename = request.match_info.get("filename", "")
+    # 使用 basename 防止路径穿越攻击
+    filename = os.path.basename(raw_filename)
+    if not filename:
         raise web.HTTPForbidden()
     file_path = os.path.join(OUTPUT_DIR, filename)
     if not os.path.exists(file_path):
